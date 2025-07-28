@@ -1,0 +1,184 @@
+import requests
+import base64
+import json
+from requests.auth import HTTPBasicAuth
+import time
+
+class JiraAPI:
+    def __init__(self, base_url, username, api_token):
+        """
+        Initialize Jira API client
+        
+        Args:
+            base_url (str): Your Jira instance URL (e.g., 'https://yourcompany.atlassian.net')
+            username (str): Your Jira username/email
+            api_token (str): Your Jira API token
+        """
+        self.base_url = base_url.rstrip('/')
+        self.username = username
+        self.api_token = api_token
+        self.session = requests.Session()
+        
+        # Set up authentication
+        self.session.auth = HTTPBasicAuth(username, api_token)
+        
+        # Set default headers
+        self.session.headers.update({
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        })
+        
+        # Configure timeouts and retries
+        self.timeout = 30
+        self.max_retries = 3
+    
+    def make_request(self, endpoint, method='GET', params=None, data=None):
+        """
+        Make a request to Jira API with error handling and retries
+        
+        Args:
+            endpoint (str): API endpoint (e.g., '/rest/api/3/field')
+            method (str): HTTP method
+            params (dict): Query parameters
+            data (dict): Request body data
+            
+        Returns:
+            dict: JSON response or None if failed
+        """
+        url = f"{self.base_url}{endpoint}"
+        
+        for attempt in range(self.max_retries):
+            try:
+                print(f"Making {method} request to: {url}")
+                
+                response = self.session.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=data,
+                    timeout=self.timeout
+                )
+                
+                # Check if request was successful
+                response.raise_for_status()
+                
+                return response.json()
+                
+            except requests.exceptions.Timeout:
+                print(f"Timeout error on attempt {attempt + 1}/{self.max_retries}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    print("Max retries reached. Request failed due to timeout.")
+                    return None
+                    
+            except requests.exceptions.ConnectionError as e:
+                print(f"Connection error on attempt {attempt + 1}/{self.max_retries}: {e}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2 ** attempt)
+                else:
+                    print("Max retries reached. Connection failed.")
+                    return None
+                    
+            except requests.exceptions.HTTPError as e:
+                print(f"HTTP error: {e}")
+                print(f"Response status: {response.status_code}")
+                print(f"Response text: {response.text}")
+                return None
+                
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                return None
+    
+    def get_fields(self):
+        """
+        Fetch all fields from Jira
+        
+        Returns:
+            list: List of field objects
+        """
+        return self.make_request('/rest/api/3/field')
+    
+    def get_custom_fields(self):
+        """
+        Fetch only custom fields from Jira
+        
+        Returns:
+            list: List of custom field objects
+        """
+        fields = self.get_fields()
+        if fields:
+            return [field for field in fields if field.get('custom', False)]
+        return []
+    
+    def test_connection(self):
+        """
+        Test the connection to Jira API
+        
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
+        result = self.make_request('/rest/api/3/myself')
+        if result:
+            print(f"Connection successful! Logged in as: {result.get('displayName', 'Unknown')}")
+            return True
+        else:
+            print("Connection failed!")
+            return False
+
+def main():
+    # Configuration - Replace with your actual values
+    JIRA_URL = "https://yourcompany.atlassian.net"  # Your Jira instance URL
+    USERNAME = "your-email@company.com"  # Your Jira username/email
+    API_TOKEN = "your-api-token-here"  # Your Jira API token
+    
+    # Create Jira API client
+    jira = JiraAPI(JIRA_URL, USERNAME, API_TOKEN)
+    
+    # Test connection first
+    print("Testing connection...")
+    if not jira.test_connection():
+        print("Failed to connect to Jira. Please check your credentials and URL.")
+        return
+    
+    print("\n" + "="*50)
+    print("Fetching all fields...")
+    
+    # Fetch all fields
+    fields = jira.get_fields()
+    
+    if fields:
+        print(f"Successfully fetched {len(fields)} fields:")
+        print("\nField Summary:")
+        print("-" * 80)
+        print(f"{'ID':<20} {'Name':<30} {'Type':<15} {'Custom'}")
+        print("-" * 80)
+        
+        for field in fields[:10]:  # Show first 10 fields
+            field_id = field.get('id', 'N/A')
+            field_name = field.get('name', 'N/A')[:28]
+            field_type = field.get('schema', {}).get('type', 'N/A')
+            is_custom = 'Yes' if field.get('custom', False) else 'No'
+            
+            print(f"{field_id:<20} {field_name:<30} {field_type:<15} {is_custom}")
+        
+        if len(fields) > 10:
+            print(f"... and {len(fields) - 10} more fields")
+        
+        # Show custom fields separately
+        custom_fields = jira.get_custom_fields()
+        if custom_fields:
+            print(f"\nFound {len(custom_fields)} custom fields:")
+            for field in custom_fields[:5]:  # Show first 5 custom fields
+                print(f"  - {field.get('name', 'N/A')} (ID: {field.get('id', 'N/A')})")
+        
+        # Save full response to file for inspection
+        with open('jira_fields.json', 'w') as f:
+            json.dump(fields, f, indent=2)
+        print(f"\nFull field data saved to 'jira_fields.json'")
+        
+    else:
+        print("Failed to fetch fields. Check the error messages above.")
+
+if __name__ == "__main__":
+    main()
