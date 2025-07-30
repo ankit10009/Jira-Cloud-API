@@ -33,17 +33,29 @@ class JiraAPI:
         # Set up authentication
         self.session.auth = HTTPBasicAuth(username, api_token)
         
-        # Set default headers
+        # Set default headers to match Postman behavior
         self.session.headers.update({
             'Accept': 'application/json',
             'Content-Type': 'application/json',
-            'X-Atlassian-Token': 'no-check',  # Prevents CSRF issues
-            'User-Agent': 'Python-Jira-Client/1.0'
+            'X-Atlassian-Token': 'no-check',
+            'User-Agent': 'Python-Jira-Client/1.0',
+            'Connection': 'keep-alive',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Cache-Control': 'no-cache'
         })
         
         # Configure timeouts and retries
         self.timeout = 30
         self.max_retries = 3
+        
+        # Enable connection pooling and keep-alive like Postman
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=0  # We handle retries manually
+        )
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
     
     def _configure_proxy_from_environment(self):
         """
@@ -167,16 +179,24 @@ class JiraAPI:
     def test_connection(self):
         """
         Test the connection to Jira API
-        
-        Returns:
-            bool: True if connection successful, False otherwise
+        First make a simple request to establish session like Postman does
         """
+        # First, try to get server info (this often generates session cookies)
+        print("Step 1: Getting server info to establish session...")
+        server_info = self.make_request('/rest/api/3/serverInfo')
+        
+        if server_info:
+            print(f"Server: {server_info.get('serverTitle', 'Unknown')} - {server_info.get('version', 'Unknown')}")
+        
+        # Then test user authentication
+        print("Step 2: Testing user authentication...")
         result = self.make_request('/rest/api/3/myself')
         if result:
-            print(f"Connection successful! Logged in as: {result.get('displayName', 'Unknown')}")
+            print(f"✅ Connection successful! Logged in as: {result.get('displayName', 'Unknown')}")
+            print(f"Email: {result.get('emailAddress', 'Unknown')}")
             return True
         else:
-            print("Connection failed!")
+            print("❌ Connection failed!")
             return False
 
 def get_proxy_configuration():
